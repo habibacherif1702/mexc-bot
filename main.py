@@ -5,8 +5,8 @@ from datetime import datetime
 from keep_alive import keep_alive
 
 # بيانات Telegram
-TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"
-TELEGRAM_CHAT_ID = "5927295954"
+TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"  # ضع التوكن الخاص بك هنا
+TELEGRAM_CHAT_ID = "5927295954"    # ضع معرف الشات الخاص بك هنا
 
 # الأزواج التي سيتم تحليلها (20 زوج)
 TRADING_PAIRS = [
@@ -24,14 +24,14 @@ def send_telegram(msg):
     except Exception as e:
         print("❌ Telegram Error:", e)
 
-# تحليل باستخدام بيانات RSI و EMA فقط (للتجريب)
+# تحليل باستخدام بيانات RSI و EMA فقط
 def analyze_symbol(pair):
     try:
         symbol = pair.replace("_", "")
         klines = requests.get(f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=5m&limit=100").json()
         closes = [float(c[4]) for c in klines]
 
-        if len(closes) < 30:
+        if len(closes) < 50:
             return
 
         # حساب EMA
@@ -81,9 +81,9 @@ def start_bot():
             t.start()
         for t in threads:
             t.join()
-        time.sleep(300)  # تحليل كل 5 دقائق
+        time.sleep(120)  # تحليل كل دقيقتين
 
 if __name__ == "__main__":
     keep_alive()
-    send_telegram("🚀 بدأ البوت في التحليل الذكي للعملات (بدون تنفيذ صفقات)...")
+    send_telegram("🚀 بدأ البوت في التحليل الذكي للعملات (كل دقيقتين)...")
     start_bot()
