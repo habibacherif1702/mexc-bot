@@ -5,10 +5,9 @@ from datetime import datetime
 from keep_alive import keep_alive
 
 # بيانات Telegram
-TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"  # ضع التوكن الخاص بك هنا
-TELEGRAM_CHAT_ID = "5927295954"    # ضع معرف الشات الخاص بك هنا
+TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"
+TELEGRAM_CHAT_ID = "5927295954"
 
-# الأزواج التي سيتم تحليلها (20 زوج)
 TRADING_PAIRS = [
     "BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT", "XRP_USDT",
     "ADA_USDT", "DOGE_USDT", "AVAX_USDT", "LTC_USDT", "MATIC_USDT",
@@ -16,7 +15,8 @@ TRADING_PAIRS = [
     "APE_USDT", "FIL_USDT", "UNI_USDT", "ARB_USDT", "SAND_USDT"
 ]
 
-# إرسال رسالة تلغرام
+trade_results = []  # ⬅️ لحفظ كل الصفقات وتحليلها لاحقًا
+
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
@@ -24,38 +24,8 @@ def send_telegram(msg):
     except Exception as e:
         print("❌ Telegram Error:", e)
 
-# تحليل باستخدام بيانات RSI و EMA فقط
-def analyze_symbol(pair):
-    try:
-        symbol = pair.replace("_", "")
-        klines = requests.get(f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=5m&limit=100").json()
-        closes = [float(c[4]) for c in klines]
-
-        if len(closes) < 50:
-            return
-
-        # حساب EMA
-        ema_14 = sum(closes[-14:]) / 14
-        ema_50 = sum(closes[-50:]) / 50
-        rsi = calculate_rsi(closes)
-
-        signal = ""
-        if rsi < 30 and ema_14 > ema_50:
-            signal = f"📈 فرصة شراء محتملة لـ {pair}\nRSI = {rsi:.2f}\nEMA14 > EMA50"
-        elif rsi > 70 and ema_14 < ema_50:
-            signal = f"📉 فرصة بيع محتملة لـ {pair}\nRSI = {rsi:.2f}\nEMA14 < EMA50"
-
-        if signal:
-            send_telegram(signal)
-            print(signal)
-
-    except Exception as e:
-        print(f"❌ خطأ مع {pair}: {e}")
-
-# حساب RSI
 def calculate_rsi(closes, period=14):
-    gains = []
-    losses = []
+    gains, losses = [], []
     for i in range(1, period + 1):
         change = closes[-i] - closes[-i - 1]
         if change >= 0:
@@ -69,7 +39,58 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# تشغيل التحليل المستمر
+def analyze_symbol(pair):
+    try:
+        symbol = pair.replace("_", "")
+        klines = requests.get(f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=5m&limit=100").json()
+        closes = [float(c[4]) for c in klines]
+        if len(closes) < 50:
+            return
+
+        ema_14 = sum(closes[-14:]) / 14
+        ema_50 = sum(closes[-50:]) / 50
+        rsi = calculate_rsi(closes)
+        current_price = closes[-1]
+
+        signal = ""
+        direction = ""
+
+        if rsi < 30 and ema_14 > ema_50:
+            signal = f"📈 فرصة شراء محتملة لـ {pair}\nRSI = {rsi:.2f}\nEMA14 > EMA50"
+            direction = "BUY"
+        elif rsi > 70 and ema_14 < ema_50:
+            signal = f"📉 فرصة بيع محتملة لـ {pair}\nRSI = {rsi:.2f}\nEMA14 < EMA50"
+            direction = "SELL"
+
+        if signal:
+            send_telegram(signal)
+            print(signal)
+            threading.Thread(target=evaluate_trade_after_delay, args=(pair, current_price, direction)).start()
+
+    except Exception as e:
+        print(f"❌ خطأ مع {pair}: {e}")
+
+def evaluate_trade_after_delay(pair, entry_price, direction):
+    time.sleep(60)  # ⏳ ننتظر دقيقة
+    try:
+        symbol = pair.replace("_", "")
+        klines = requests.get(f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=1m&limit=2").json()
+        latest_price = float(klines[-1][4])
+
+        result = "❓ غير معروف"
+        if direction == "BUY":
+            result = "✅ Win" if latest_price > entry_price else "❌ Lose"
+        elif direction == "SELL":
+            result = "✅ Win" if latest_price < entry_price else "❌ Lose"
+
+        message = f"📊 نتيجة صفقة {pair} بعد دقيقة:\nالإتجاه: {direction}\nسعر الدخول: {entry_price}\nالسعر الآن: {latest_price}\n➡️ {result}"
+        send_telegram(message)
+        print(message)
+        trade_results.append(result)
+
+    except Exception as e:
+        print(f"❌ تقييم الصفقة فشل لـ {pair}: {e}")
+
 def start_bot():
     while True:
         now = datetime.now().strftime("%H:%M:%S")
@@ -81,9 +102,9 @@ def start_bot():
             t.start()
         for t in threads:
             t.join()
-        time.sleep(120)  # تحليل كل دقيقتين
+        time.sleep(120)  # تحليل كل 2 دقائق الآن
 
 if __name__ == "__main__":
     keep_alive()
-    send_telegram("🚀 بدأ البوت في التحليل الذكي للعملات (كل دقيقتين)...")
+    send_telegram("🚀 بدأ البوت في التحليل الذكي للعملات (مع تقييم النتائج)...")
     start_bot()
