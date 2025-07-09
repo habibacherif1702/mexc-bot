@@ -3,12 +3,15 @@ import time
 import threading
 from datetime import datetime
 from keep_alive import keep_alive
+from ta.trend import EMAIndicator, MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
+import pandas as pd
 
-# بيانات Telegram
-TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"
-TELEGRAM_CHAT_ID = "5927295954"
+# بيانات التليغرام
+TELEGRAM_BOT_TOKEN = "8086981481:AAFNOPkMrKasjIWSUtvIWKt2vSLxu6rO-o8"  # ← ضع التوكن هنا
+TELEGRAM_CHAT_ID = "5927295954"    # ← ضع Chat ID هنا
 
-# الأزواج التي سيتم تحليلها (20 زوج)
 TRADING_PAIRS = [
     "BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT", "XRP_USDT",
     "ADA_USDT", "DOGE_USDT", "AVAX_USDT", "LTC_USDT", "MATIC_USDT",
@@ -16,95 +19,82 @@ TRADING_PAIRS = [
     "APE_USDT", "FIL_USDT", "UNI_USDT", "ARB_USDT", "SAND_USDT"
 ]
 
-# سجل الصفقات اليومية
-TRADE_LOG = []
-
-# إرسال رسالة تلغرام
+# تلغرام
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
     except Exception as e:
-        print("❌ Telegram Error:", e)
+        print("Telegram Error:", e)
 
-# تحليل باستخدام RSI و EMA
+signals_sent = []
+
+# تحليل
 def analyze_symbol(pair):
     try:
         symbol = pair.replace("_", "")
-        klines = requests.get(f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=5m&limit=100").json()
-        closes = [float(c[4]) for c in klines]
+        url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=5m&limit=100"
+        data = requests.get(url).json()
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'num_trades',
+            'taker_buy_base', 'taker_buy_quote', 'ignore'
+        ])
+        df['close'] = pd.to_numeric(df['close'])
+        closes = df['close']
 
-        if len(closes) < 50:
-            return
-
-        ema_14 = sum(closes[-14:]) / 14
-        ema_50 = sum(closes[-50:]) / 50
-        rsi = calculate_rsi(closes)
+        rsi = RSIIndicator(closes, window=14).rsi().iloc[-1]
+        macd = MACD(closes).macd().iloc[-1]
+        macd_signal = MACD(closes).macd_signal().iloc[-1]
+        ema14 = EMAIndicator(closes, window=14).ema_indicator().iloc[-1]
+        ema50 = EMAIndicator(closes, window=50).ema_indicator().iloc[-1]
+        bb = BollingerBands(closes, window=20)
+        upper = bb.bollinger_hband().iloc[-1]
+        lower = bb.bollinger_lband().iloc[-1]
+        price = closes.iloc[-1]
 
         signal = ""
-        if rsi < 30 and ema_14 > ema_50:
-            signal = f"📈 شراء {pair}\nRSI = {rsi:.2f} | EMA14 > EMA50"
-        elif rsi > 70 and ema_14 < ema_50:
-            signal = f"📉 بيع {pair}\nRSI = {rsi:.2f} | EMA14 < EMA50"
+        if rsi > 70 and macd < macd_signal and ema14 < ema50 and price > upper:
+            signal = f"📉 صفقة بيع محتملة لـ {pair}\nRSI = {rsi:.2f}\nMACD < Signal\nEMA14 < EMA50\nالسعر فوق Bollinger"
+        elif rsi < 30 and macd > macd_signal and ema14 > ema50 and price < lower:
+            signal = f"📈 صفقة شراء محتملة لـ {pair}\nRSI = {rsi:.2f}\nMACD > Signal\nEMA14 > EMA50\nالسعر تحت Bollinger"
 
         if signal:
-            TRADE_LOG.append(f"{datetime.now().strftime('%H:%M')} - {signal}")
+            signals_sent.append(signal)
             send_telegram(signal)
             print(signal)
 
     except Exception as e:
-        print(f"❌ خطأ في {pair}: {e}")
+        print(f"❌ Error in {pair}: {e}")
 
-# حساب RSI
-def calculate_rsi(closes, period=14):
-    gains = []
-    losses = []
-    for i in range(1, period + 1):
-        change = closes[-i] - closes[-i - 1]
-        if change >= 0:
-            gains.append(change)
+# تقرير كل 20 دقيقة
+def report():
+    while True:
+        time.sleep(1200)  # كل 20 دقيقة
+        now = datetime.now().strftime("%H:%M:%S")
+        if signals_sent:
+            msg = f"📊 تقرير في {now}:\n\n" + "\n\n".join(signals_sent)
         else:
-            losses.append(abs(change))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+            msg = f"📊 تقرير في {now}:\nلا توجد صفقات حتى الآن."
+        send_telegram(msg)
+        signals_sent.clear()
 
-# إرسال تقرير نهاية اليوم
-def send_daily_report():
-    if not TRADE_LOG:
-        send_telegram("📊 لا توجد إشارات اليوم.")
-        return
-
-    report = "📊 **تقرير نهاية اليوم:**\n\n"
-    report += "\n".join(TRADE_LOG)
-    send_telegram(report)
-
-# البوت الأساسي
+# تحليل مستمر
 def start_bot():
-    count = 0
     while True:
         now = datetime.now().strftime("%H:%M:%S")
-        print(f"✅ تحليل جديد في {now}")
+        print(f"🌀 تحليل جديد في {now}")
         threads = []
         for pair in TRADING_PAIRS:
             t = threading.Thread(target=analyze_symbol, args=(pair,))
-            threads.append(t)
             t.start()
+            threads.append(t)
         for t in threads:
             t.join()
-
-        count += 1
-        if count == 10:  # كل 10 دورات تقريبًا = 20 دقيقة إذا كل دورة 2 دقيقة
-            send_daily_report()
-            TRADE_LOG.clear()
-            count = 0
-
-        time.sleep(120)  # تحليل كل دقيقتين
+        time.sleep(120)  # كل دقيقتين
 
 if __name__ == "__main__":
     keep_alive()
-    send_telegram("🚀 البوت يعمل وسيقوم بإرسال تقرير نهاية كل 20 دقيقة مؤقتاً.")
+    send_telegram("🚀 البوت يعمل بتحليل احترافي ويُرسل إشارات قوية + تقرير كل 20 دقيقة.")
+    threading.Thread(target=report).start()
     start_bot()
